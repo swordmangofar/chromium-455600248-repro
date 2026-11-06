@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>crbug 455600248 repro</title>
+<style>
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 880px; margin: 2rem auto; padding: 0 1rem; color: #1d1d1f; }
+  code { background: #f2f2f4; padding: 0 .3em; border-radius: 4px; }
+  pre { background: #f6f6f8; padding: .8rem 1rem; border-radius: 8px; overflow-x: auto; font-size: 13px; }
+  button { font: inherit; padding: .45rem .9rem; margin: .25rem .35rem .25rem 0; border-radius: 8px; border: 1px solid #c7c7cc; background: #fff; cursor: pointer; }
+  button.primary { background: #0a66d8; border-color: #0a66d8; color: #fff; }
+  table { border-collapse: collapse; margin: .5rem 0 1rem; }
+  td, th { text-align: left; padding: .25rem .8rem .25rem 0; vertical-align: top; }
+  #log { font: 12px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>DevTools: "Failed to load response data" for fetch() + <code>Cache-Control: no-store</code></h1>
+
+<p>Repro for <a href="https://issues.chromium.org/issues/455600248">crbug.com/455600248</a>.</p>
+
+<ol>
+  <li>Open DevTools &rarr; <b>Network</b> tab.</li>
+  <li>Click <b>fetch() + body.getReader()</b>.</li>
+  <li>Select the <code>stock</code> request &rarr; <b>Response</b> or <b>Preview</b> tab.</li>
+</ol>
+
+<p><b>Expected:</b> the JSON body is shown. The page received all of it (see the log below).<br>
+<b>Actual:</b> <i>"Failed to load response data: No data found for resource with given identifier"</i>.
+The request still shows status <code>200</code>, but DevTools got <code>Network.loadingFailed</code>
+(<code>canceled: true</code>) and no <code>Network.loadingFinished</code>.</p>
+
+<p>
+  <button class="primary" data-variant="fetch-reader">fetch() + body.getReader()</button>
+  <button class="primary" data-variant="fetch-reader" data-times="10">&hellip; &times; 10</button>
+</p>
+<p>Controls (DevTools shows the body):<br>
+  <button data-variant="fetch-reader-cacheable">same, response without no-store</button>
+  <button data-variant="fetch-json">same request, but response.json()</button>
+  <button data-variant="xhr">XMLHttpRequest</button>
+  <button id="clear">Clear log</button>
+</p>
+
+<table>
+  <tr><th>Condition</th><th>Body in DevTools</th></tr>
+  <tr><td>fetch(), body read via <code>response.body.getReader()</code></td><td rowspan="3">missing, needs all three</td></tr>
+  <tr><td>response has <code>Cache-Control: no-store</code></td></tr>
+  <tr><td>response body arrives in more than one piece</td></tr>
+  <tr><td><code>response.json()</code> / <code>.text()</code> / XHR / cacheable response</td><td>shown</td></tr>
+</table>
+
+<p>The server sends the same headers as the original report (Spring Boot with Spring Security
+defaults, which include <code>Cache-Control: no-cache, no-store, max-age=0, must-revalidate</code>).
+It streams the JSON in 32 pieces 1&nbsp;ms apart, as Tomcat does when it flushes its buffer.
+Angular's <code>HttpClient</code> with <code>withFetch()</code> (the default since Angular&nbsp;22)
+reads every response this way:</p>
+<pre>const res = await fetch('/api/b2b/v2/stock', { method: 'POST', body, headers });
+const reader = res.body.getReader();
+while (!(await reader.read()).done) {}   // the page gets the complete body</pre>
+
+<div id="log"></div>
+
+<script>
+const API = '/api/b2b/v2/stock';
+const REQUEST_BODY = JSON.stringify({ search: 'PRODUCT', mc: '8019227374674', page: 0, size: 50 });
+const HEADERS = { 'Content-Type': 'application/json' };
+const logEl = document.getElementById('log');
+const log = (msg) => { logEl.textContent = `${new Date().toISOString().slice(11, 23)}  ${msg}\n` + logEl.textContent; };
+
+async function readWithReader(res) {
+  const reader = res.body.getReader();
+  const chunks = [];
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+  return new TextDecoder().decode(await new Blob(chunks).arrayBuffer());
+}
+
+const post = (url) => fetch(url, { method: 'POST', body: REQUEST_BODY, headers: HEADERS });
+
+const variants = {
+  // The bug: fetch() + ReadableStream reader (what Angular's FetchBackend does).
+  async 'fetch-reader'(url) {
+    const res = await post(url);
+    return { status: res.status, text: await readWithReader(res) };
+  },
+  // Control: identical, but the response is cacheable (no "no-store").
+  async 'fetch-reader-cacheable'(url) {
+    const res = await post(url + (url.includes('?') ? '&' : '?') + 'nostore=0');
+    return { status: res.status, text: await readWithReader(res) };
+  },
+  // Control: identical request and response, body read with response.json().
+  async 'fetch-json'(url) {
+    const res = await post(url);
+    const json = await res.json();
+    return { status: res.status, text: JSON.stringify(json) };
+  },
+  // Control: XMLHttpRequest (Angular's withXhr() / the default before Angular 22).
+  'xhr'(url) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', url);
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.onload = () => resolve({ status: xhr.status, text: xhr.responseText });
+      xhr.onerror = reject;
+      xhr.send(REQUEST_BODY);
+    });
+  },
+};
+
+// Used by the buttons and by verify.mjs. `query` is passed to the server, e.g. "chunks=1".
+window.runVariant = async (name, query = '') => {
+  const url = API + (query ? `?${query}` : '');
+  const { status, text } = await variants[name](url);
+  const items = JSON.parse(text).items.length;
+  log(`${name.padEnd(23)} status=${status}  page received ${text.length} bytes, ${items} items`);
+  return { status, bytes: text.length, items };
+};
+
+document.querySelectorAll('button[data-variant]').forEach((button) => {
+  button.addEventListener('click', async () => {
+    const times = Number(button.dataset.times ?? 1);
+    for (let i = 0; i < times; i++) {
+      try { await window.runVariant(button.dataset.variant, location.search.slice(1)); }
+      catch (e) { log(`${button.dataset.variant}: ERROR ${e}`); }
+    }
+  });
+});
+document.getElementById('clear').addEventListener('click', () => { logEl.textContent = ''; });
+</script>
+</body>
+</html>

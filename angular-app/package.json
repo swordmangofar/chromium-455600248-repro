@@ -1,0 +1,24 @@
+{
+  "name": "angular-app",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "ng": "ng",
+    "start": "ng serve"
+  },
+  "dependencies": {
+    "@angular/common": "20.3.13",
+    "@angular/compiler": "20.3.13",
+    "@angular/core": "20.3.13",
+    "@angular/platform-browser": "20.3.13",
+    "rxjs": "~7.8.0",
+    "tslib": "^2.3.0",
+    "zone.js": "~0.15.0"
+  },
+  "devDependencies": {
+    "@angular/build": "20.3.13",
+    "@angular/cli": "20.3.13",
+    "@angular/compiler-cli": "20.3.13",
+    "typescript": "~5.9.2"
+  }
+}

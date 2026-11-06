@@ -1,0 +1,12 @@
+{
+  "name": "crbug-455600248-repro",
+  "private": true,
+  "description": "Repro for crbug.com/455600248: DevTools loses fetch() response bodies (no-store + ReadableStream reader)",
+  "scripts": {
+    "start": "node server.mjs",
+    "verify": "node verify.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
